@@ -1,565 +1,460 @@
 import streamlit as st
 import pandas as pd
+import datetime
 import io
-import random
-from datetime import datetime, timedelta
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
-# ─────────────────────────────────────────────
-# Настройки страницы
-# ─────────────────────────────────────────────
-st.set_page_config(
-    page_title="SmartSchedule PL — Панель Управления",
-    layout="wide",
-    page_icon="🗓️",
-    initial_sidebar_state="expanded"
-)
+# =====================================================================
+# НАСТРОЙКИ СТРАНИЦЫ И СКРЫТИЕ ИНТЕРФЕЙСА STREAMLIT
+# =====================================================================
+st.set_page_config(page_title="Архитектор расписания", layout="wide", page_icon="📅")
 
-# ─────────────────────────────────────────────
-# Данные по умолчанию и инициализация session_state
-# ─────────────────────────────────────────────
-
-DEFAULT_SUBJECTS = [
-    {"Дисциплина": "Основы программирования", "Часы (Типовой план на 2 года)": 240, "Преподаватель": "Асанов А.А.", "Аудитория": "204"},
-    {"Дисциплина": "Произв. обучение (в сетке)", "Часы (Типовой план на 2 года)": 420, "Преподаватель": "Иванов И.И.", "Аудитория": "Мастерская 1"},
-    {"Дисциплина": "Кыргызский язык", "Часы (Типовой план на 2 года)": 120, "Преподаватель": "Усенова Б.С.", "Аудитория": "102"},
-    {"Дисциплина": "Алгебра", "Часы (Типовой план на 2 года)": 136, "Преподаватель": "Петров П.П.", "Аудитория": "305"},
-    {"Дисциплина": "Web дизайн", "Часы (Типовой план на 2 года)": 120, "Преподаватель": "Асанов А.А.", "Аудитория": "204"},
-    {"Дисциплина": "Основы бизнеса", "Часы (Типовой план на 2 года)": 188, "Преподаватель": "Алиева К.Д.", "Аудитория": "105"},
-]
-
-if "subjects_db" not in st.session_state:
-    st.session_state.subjects_db = pd.DataFrame(DEFAULT_SUBJECTS)
-if "sidebar_open" not in st.session_state:
-    st.session_state.sidebar_open = True
-if "theme" not in st.session_state:
-    st.session_state.theme = "light"
-
-# ─────────────────────────────────────────────
-# Темы
-# ─────────────────────────────────────────────
-
-THEMES = {
-    "light": {
-        "bg": "#FFFFFF",
-        "sidebar_bg": "#F0F4FF",
-        "text": "#1a1a2e",
-        "accent": "#1E3A8A",
-        "card_bg": "#F8FAFF",
-        "border": "#D0D9F0",
-        "tab_sel_bg": "#1E3A8A",
-        "tab_sel_text": "#FFFFFF",
-        "metric_color": "#1E3A8A",
-        "input_bg": "#FFFFFF",
-    },
-    "dark": {
-        "bg": "#0E1117",
-        "sidebar_bg": "#161B27",
-        "text": "#E8EAF0",
-        "accent": "#4A7FDB",
-        "card_bg": "#1A2035",
-        "border": "#2E3A55",
-        "tab_sel_bg": "#4A7FDB",
-        "tab_sel_text": "#FFFFFF",
-        "metric_color": "#7EB3FF",
-        "input_bg": "#1A2035",
-    }
+hide_streamlit_style = """
+<style>
+#MainMenu {visibility: hidden;}
+header {visibility: hidden;}
+footer {visibility: hidden;}
+[data-testid="collapsedControl"] {display: none;}
+.stAppDeployButton {display: none;}
+.custom-footer {
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    background-color: transparent;
+    color: #888;
+    text-align: right;
+    padding: 10px 20px;
+    font-size: 14px;
+    font-weight: bold;
+    z-index: 100;
 }
-
-T = THEMES[st.session_state.theme]
-
-st.markdown(f"""
-    <style>
-    footer {{visibility: hidden;}}
-    [data-testid="stHeader"] {{display: none !important;}}
-    .stAppDeployButton {{display: none !important;}}
-    [data-testid="stStatusWidget"] {{display: none !important;}}
-    h1 a, h2 a, h3 a, h4 a, h5 a, h6 a {{ display: none !important; }}
-    [data-testid="stHeaderActionElements"] {{ display: none !important; }}
-    .block-container {{ padding-top: 1.2rem !important; }}
-
-    .stApp {{ background-color: {T['bg']} !important; color: {T['text']} !important; }}
-
-    [data-testid="stSidebar"] {{
-        background-color: {T['sidebar_bg']} !important;
-        border-right: 1px solid {T['border']} !important;
-    }}
-
-    .stTabs [data-baseweb="tab"] {{
-        background-color: {T['card_bg']};
-        border: 1px solid {T['border']};
-        padding: 10px 20px;
-        border-radius: 8px;
-        font-weight: 600;
-        color: {T['text']} !important;
-    }}
-    .stTabs [aria-selected="true"] {{
-        background-color: {T['tab_sel_bg']} !important;
-        color: {T['tab_sel_text']} !important;
-        border-color: {T['tab_sel_bg']} !important;
-    }}
-
-    /* ── Общие Кнопки ── */
-    .stButton>button {{
-        background-color: {T['card_bg']} !important;
-        color: {T['text']} !important;
-        border: 1.5px solid {T['accent']} !important;
-        font-weight: 600;
-        transition: all 0.2s ease;
-        width: 100%;
-    }}
-    .stButton>button:hover {{
-        background-color: {T['accent']} !important;
-        color: #FFFFFF !important;
-        border-color: {T['accent']} !important;
-    }}
-    .stButton>button p, .stButton>button span {{
-        color: {T['text']} !important;
-    }}
-    .stButton>button:hover p, .stButton>button:hover span {{
-        color: #FFFFFF !important;
-    }}
-
-    /* ── Специфический стиль для БЕЛОЙ кнопки «⋯» ── */
-    .white-button .stButton>button {{
-        background-color: #FFFFFF !important;
-        color: #1A1A2E !important;
-        border: 1.5px solid {T['border']} !important;
-    }}
-    .white-button .stButton>button:hover {{
-        background-color: {T['accent']} !important;
-        color: #FFFFFF !important;
-        border-color: {T['accent']} !important;
-    }}
-    .white-button .stButton>button p, .white-button .stButton>button span {{
-        color: #1A1A2E !important;
-    }}
-    .white-button .stButton>button:hover p, .white-button .stButton>button:hover span {{
-        color: #FFFFFF !important;
-    }}
-
-    /* ── Поля ввода (Полное исправление черного фона на светлой теме) ── */
-    input, textarea, select,
-    [data-baseweb="input"],
-    [data-baseweb="input"] > div,
-    [data-baseweb="base-input"],
-    [data-testid="stDateInput"] div,
-    [data-testid="stTextInput"] div,
-    [data-testid="stNumberInput"] div,
-    [data-testid="stDateInput"] input,
-    [data-testid="stTextInput"] input,
-    [data-testid="stNumberInput"] input {{
-        background-color: {T['input_bg']} !important;
-        color: {T['text']} !important;
-        border-color: {T['border']} !important;
-    }}
-    input::placeholder, textarea::placeholder {{
-        color: {T['text']} !important;
-        opacity: 0.4 !important;
-    }}
-
-    /* ── Слайдер ── */
-    [data-testid="stSlider"] label, [data-testid="stSlider"] p {{
-        color: {T['text']} !important;
-    }}
-
-    /* ── Лейблы ── */
-    label, p {{
-        color: {T['text']} !important;
-    }}
-
-    div[data-testid="stMetricValue"] {{
-        font-size: 28px;
-        color: {T['metric_color']};
-        font-weight: bold;
-    }}
-    </style>
-""", unsafe_allow_html=True)
-
-if not st.session_state.sidebar_open:
-    st.markdown("""
-        <style>
-        [data-testid="stSidebar"] { display: none !important; }
-        [data-testid="collapsedControl"] { display: none !important; }
-        </style>
-    """, unsafe_allow_html=True)
-
-# ─────────────────────────────────────────────
-# Вспомогательные функции
-# ─────────────────────────────────────────────
-
-def safe_capitalize(s: str) -> str:
-    s = s.strip()
-    return s[0].upper() + s[1:] if s else s
-
-
-def apply_auto_capitalize(df: pd.DataFrame) -> pd.DataFrame:
-    for col in ["Дисциплина", "Преподаватель", "Аудитория"]:
-        if col in df.columns:
-            df[col] = df[col].astype(str).map(safe_capitalize)
-    return df
-
-
-def build_working_days(start_date, end_date, holidays_set: set) -> list:
-    days = []
-    current = start_date
-    while current <= end_date:
-        if current.weekday() != 6 and current.strftime("%d.%m") not in holidays_set:
-            days.append(current)
-        current += timedelta(days=1)
-    return days
-
-
-# ─────────────────────────────────────────────
-# Константы
-# ─────────────────────────────────────────────
-
-TIME_SLOTS = {
-    1: "08:00–08:45", 2: "08:50–09:35", 3: "09:40–10:25", 4: "10:30–11:15",
-    5: "11:35–12:20", 6: "12:40–13:25", 7: "13:30–14:15"
-}
-
-HOLIDAYS: set = {
-    "07.11", "08.11",
-    "01.01", "02.01", "03.01", "04.01", "05.01", "06.01",
-    "07.01", "08.01", "09.01", "10.01",
-    "08.03", "21.03", "07.04", "01.05", "05.05", "09.05"
-}
-
-DAY_NAMES = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"]
-
-# ─────────────────────────────────────────────
-# Генератор расписания
-# ─────────────────────────────────────────────
-
-def generate_collision_free_schedule(
-    db_data: pd.DataFrame,
-    start_date,
-    end_date,
-    max_lpd: int = 3
-):
-    plans = {"1 Курс": {}, "2 Курс": {}}
-
-    for _, row in db_data.iterrows():
-        sub = str(row["Дисциплина"])
-        teacher = str(row["Преподаватель"])
-        room = str(row["Аудитория"])
-        total_hours = int(row["Часы (Типовой план на 2 года)"])
-        hours_c1 = (total_hours + 1) // 2
-        hours_c2 = total_hours // 2
-        if hours_c1 > 0:
-            plans["1 Курс"][sub] = {"hours": hours_c1, "teacher": teacher, "room": room}
-        if hours_c2 > 0:
-            plans["2 Курс"][sub] = {"hours": hours_c2, "teacher": teacher, "room": room}
-
-    working_days = build_working_days(start_date, end_date, HOLIDAYS)
-    res_1, res_2 = [], []
-    global_tracker: dict = {}
-
-    for day in working_days:
-        day_str = day.strftime("%d.%m.%Y")
-        day_name = DAY_NAMES[day.weekday()]
-        max_slots = 4 if day.weekday() == 5 else 7
-        daily_counts: dict = {"1 Курс": {}, "2 Курс": {}}
-
-        for slot in range(1, max_slots + 1):
-            key = (day_str, slot)
-            global_tracker.setdefault(key, {"teachers": set(), "rooms": set()})
-
-            for course in ("1 Курс", "2 Курс"):
-                course_plan = plans[course]
-                available = [s for s, info in course_plan.items() if info["hours"] > 0]
-                if not available:
-                    continue
-                valid = [s for s in available if daily_counts[course].get(s, 0) < max_lpd] or available
-
-                strict_valid = []
-                for s in valid:
-                    tname = course_plan[s]["teacher"]
-                    r = course_plan[s]["room"]
-                    teacher_free = tname not in global_tracker[key]["teachers"]
-                    room_free = (r == "") or (r not in global_tracker[key]["rooms"])
-                    if teacher_free and room_free:
-                        strict_valid.append(s)
-
-                final_pool = strict_valid if strict_valid else valid
-                if not final_pool:
-                    continue
-
-                final_pool.sort(key=lambda x: course_plan[x]["hours"], reverse=True)
-                chosen = final_pool[0] if random.random() > 0.2 else random.choice(final_pool)
-
-                tname = course_plan[chosen]["teacher"]
-                rname = course_plan[chosen]["room"]
-
-                global_tracker[key]["teachers"].add(tname)
-                if rname:
-                    global_tracker[key]["rooms"].add(rname)
-
-                daily_counts[course][chosen] = daily_counts[course].get(chosen, 0) + 1
-                course_plan[chosen]["hours"] -= 1
-
-                entry = {
-                    "Дата": day_str, "День": day_name,
-                    "Время": TIME_SLOTS[slot], "Урок": slot,
-                    "Дисциплина": chosen, "Преподаватель": tname, "Кабинет": rname
-                }
-                (res_1 if course == "1 Курс" else res_2).append(entry)
-
-        if day.weekday() == 0:
-            class_hr = {
-                "Дата": day_str, "День": day_name, "Время": "14:20", "Урок": 8,
-                "Дисциплина": "Классный час", "Преподаватель": "Куратор", "Кабинет": ""
-            }
-            res_1.append(class_hr)
-            res_2.append(class_hr)
-
-    return pd.DataFrame(res_1), pd.DataFrame(res_2), plans
-
-
-# ─────────────────────────────────────────────
-# Шапка: заголовок + аккуратная белая кнопка настроек
-# ─────────────────────────────────────────────
-
-hcol, bcol = st.columns([6, 1])
-with hcol:
-    st.markdown("## 🗓️ SmartSchedule PL — Панель Управления")
-    st.caption("Профессиональная система автоматического планирования учебного процесса на 2 года")
-
-with bcol:
-    st.write("")
-    # Кнопка «⋯» обернута в специальный CSS-класс white-button для принудительного белого фона
-    st.markdown('<div class="white-button">', unsafe_allow_html=True)
-    if st.button("⋯", use_container_width=True, help="Настройки оформления"):
-        st.session_state.show_settings_menu = not st.session_state.get("show_settings_menu", False)
-        st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# Выпадающее меню настроек (показывается под шапкой)
-if st.session_state.get("show_settings_menu", False):
-    with st.container():
-        st.markdown(f"""
-            <div style="
-                background:{T['card_bg']};
-                border:1px solid {T['border']};
-                border-radius:12px;
-                padding:16px 20px;
-                margin-bottom:12px;
-                display:flex;
-                align-items:center;
-                gap:16px;
-                flex-wrap:wrap;
-            ">
-                <span style="font-weight:600;color:{T['text']};font-size:14px;">🎨 Оформление:</span>
-            </div>
-        """, unsafe_allow_html=True)
-
-        mc1, mc2, mc3, mc4 = st.columns([2, 1, 1, 1])
-        with mc1:
-            st.markdown(f"<span style='color:{T['text']};font-size:13px;'>Выберите тему интерфейса</span>", unsafe_allow_html=True)
-        with mc2:
-            if st.button("☀️ Светлая", use_container_width=True):
-                st.session_state.theme = "light"
-                st.session_state.show_settings_menu = False
-                st.rerun()
-        with mc3:
-            if st.button("🌙 Тёмная", use_container_width=True):
-                st.session_state.theme = "dark"
-                st.session_state.show_settings_menu = False
-                st.rerun()
-        with mc4:
-            if st.button("✕ Закрыть", use_container_width=True):
-                st.session_state.show_settings_menu = False
-                st.rerun()
-
-# ─────────────────────────────────────────────
-# Боковая панель
-# ─────────────────────────────────────────────
-
-with st.sidebar:
-    st.header("⚙️ Настройки системы")
-    max_lessons_per_day = st.slider("Макс. уроков одного предмета в день", 1, 4, 3)
-    st.markdown("---")
-    if st.button("📋 Загрузить демо-данные", use_container_width=True):
-        st.session_state.subjects_db = pd.DataFrame(DEFAULT_SUBJECTS)
-        for k in ("df_1", "df_2", "df_svodka", "excel_buffer"):
-            st.session_state.pop(k, None)
-        st.rerun()
-    st.markdown("---")
-    st.markdown("**ℹ️ SmartSchedule PL v2.1**")
-    st.caption("Система планирования для профессиональных лицеев Кыргызской Республики")
-
-# ─────────────────────────────────────────────
-# Вкладки
-# ─────────────────────────────────────────────
-
-tab1, tab2, tab3 = st.tabs(["🗂️ Ввод часов из плана", "🚀 Генератор", "📊 Аналитика вычитки"])
-
-# ── Вкладка 1 ─────────────────────────────────
-with tab1:
-    st.subheader("Редактор учебного плана (Общие часы на 2 года)")
-    st.markdown("Введите дисциплины и общие часы из типового плана. Система сама разделит их между 1 и 2 курсом.")
-
-    edited_df = st.data_editor(
-        st.session_state.subjects_db,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="subjects_editor",
-    )
-
-    sv_col, hint_col = st.columns([1, 3])
-    with sv_col:
-        if st.button("💾 Сохранить изменения", use_container_width=True):
-            saved = apply_auto_capitalize(edited_df.copy())
-            st.session_state.subjects_db = saved
-            st.success("✅ Сохранено! Первые буквы приведены к заглавным.")
-    with hint_col:
-        st.caption("После добавления новых строк нажмите «Сохранить» — текст будет автоматически нормализован.")
-
-    try:
-        teacher_rooms = edited_df.groupby("Преподаватель")["Аудитория"].nunique()
-        conflicts = teacher_rooms[teacher_rooms > 1].index.tolist()
-        if conflicts:
-            st.warning(f"⚠️ Преподаватели с несколькими аудиториями: {', '.join(conflicts)}")
-    except Exception:
-        pass
-
-# ── Вкладка 2 ─────────────────────────────────
-with tab2:
-    col_input, col_action = st.columns([1, 1])
-
-    with col_input:
-        st.subheader("Период семестра")
-        start_dt = st.date_input("Начало семестра", datetime(2025, 9, 1))
-        end_dt = st.date_input("Окончание семестра", datetime(2026, 5, 25))
-
-    with col_action:
-        st.subheader("Запуск модели")
-        st.write("Нажмите кнопку для автоматического расчёта и разделения сетки часов.")
-        run_generation = st.button("🚀 Начать оптимизацию расписания", type="primary", use_container_width=True)
-
-    if run_generation:
-        if start_dt >= end_dt:
-            st.error("Дата начала семестра должна быть раньше даты окончания.")
-        else:
-            with st.spinner("Генерация расписания..."):
-                df_cleaned = st.session_state.subjects_db.copy()
-                df_cleaned["Дисциплина"] = df_cleaned["Дисциплина"].astype(str).map(safe_capitalize)
-                df_cleaned["Преподаватель"] = df_cleaned["Преподаватель"].astype(str).str.strip().str.title()
-                df_cleaned["Аудитория"] = df_cleaned["Аудитория"].astype(str).str.strip()
-                df_cleaned["Часы (Типовой план на 2 года)"] = (
-                    pd.to_numeric(df_cleaned["Часы (Типовой план на 2 года)"], errors="coerce")
-                    .fillna(0).astype(int)
-                )
-                df_cleaned = df_cleaned[df_cleaned["Часы (Типовой план на 2 года)"] > 0]
-
-                df_1, df_2, final_plans = generate_collision_free_schedule(
-                    df_cleaned, start_dt, end_dt, max_lpd=max_lessons_per_day
-                )
-
-            st.session_state.df_1 = df_1
-            st.session_state.df_2 = df_2
-
-            svodka_rows = []
-            for _, row in df_cleaned.iterrows():
-                sub = row["Дисциплина"]
-                teacher = row["Преподаватель"]
-                orig_hrs = row["Часы (Типовой план на 2 года)"]
-                plan_c1 = (orig_hrs + 1) // 2
-                plan_c2 = orig_hrs // 2
-                left_1 = final_plans.get("1 Курс", {}).get(sub, {}).get("hours", 0)
-                left_2 = final_plans.get("2 Курс", {}).get(sub, {}).get("hours", 0)
-                svodka_rows.append({
-                    "Дисциплина": sub,
-                    "Преподаватель": teacher,
-                    "Общий план (2 года)": orig_hrs,
-                    "План на 1 курс": plan_c1,
-                    "Вычитано на 1 курсе": plan_c1 - left_1,
-                    "План на 2 курс": plan_c2,
-                    "Вычитано на 2 курсе": plan_c2 - left_2,
-                    "Нераспределённый остаток": left_1 + left_2,
-                })
-            st.session_state.df_svodka = pd.DataFrame(svodka_rows)
-
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-                df_1.to_excel(writer, sheet_name="1 КУРС", index=False)
-                df_2.to_excel(writer, sheet_name="2 КУРС", index=False)
-                st.session_state.df_svodka.to_excel(writer, sheet_name="Анализ вычитки", index=False)
-            buffer.seek(0)
-            st.session_state.excel_buffer = buffer.getvalue()
-
-            st.success("✅ Расписание успешно сгенерировано!")
-
-    if "excel_buffer" in st.session_state:
-        st.download_button(
-            label="📥 Скачать расписание (Excel)",
-            data=st.session_state.excel_buffer,
-            file_name=f"SmartSchedule_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
-
-    if "df_1" in st.session_state and "df_2" in st.session_state:
-        st.markdown("---")
-        st.subheader("Превью расписания")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**1 Курс** — первые 20 строк")
-            st.dataframe(st.session_state.df_1.head(20), use_container_width=True)
-        with c2:
-            st.markdown("**2 Курс** — первые 20 строк")
-            st.dataframe(st.session_state.df_2.head(20), use_container_width=True)
-
-# ── Вкладка 3 ─────────────────────────────────
-with tab3:
-    if "df_svodka" not in st.session_state:
-        st.info("Сначала запустите генерацию расписания на вкладке «Генератор».")
+</style>
+<div class="custom-footer">сделано Lottarruu</div>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
+# =====================================================================
+# 1. КЛАСС ЛОГИКИ И АЛГОРИТМА РАСПРЕДЕЛЕНИЯ ЧАСОВ
+# =====================================================================
+class ScheduleGenerator:
+    def __init__(self, group_config):
+        self.name = group_config['name']
+        self.num_courses = group_config['num_courses']
+        self.work_week = group_config['work_week']
+        self.max_saturday_lessons = group_config['max_saturday_lessons']
+        self.max_weekday_lessons = group_config['max_weekday_lessons']
+        self.max_per_subject = group_config['max_per_subject']
+        self.start_date = group_config['start_date']
+        self.end_date = group_config['end_date']
+        self.subjects = group_config['subjects']
+
+    def _is_kr_holiday(self, date_obj):
+        if date_obj.month == 1 and 1 <= date_obj.day <= 12: return "Новогодние каникулы"
+        if date_obj.month == 5 and 1 <= date_obj.day <= 9: return "Майские каникулы"
+            
+        fixed_holidays = [
+            (2, 23, "День защитника Отечества"), (3, 8, "Международный женский день"),
+            (3, 21, "Нооруз"), (4, 7, "День народной Апрельской революции"),
+            (11, 7, "День истории и памяти"), (11, 8, "День истории и памяти")
+        ]
+        for m, d, name in fixed_holidays:
+            if date_obj.month == m and date_obj.day == d: return name
+                
+        floating_holidays = {
+            2025: [(3, 30, "Орозо айт"), (6, 6, "Курман айт")],
+            2026: [(3, 20, "Орозо айт"), (5, 27, "Курман айт")],
+            2027: [(3, 10, "Орозо айт"), (5, 17, "Курман айт")],
+            2028: [(2, 27, "Орозо айт"), (5, 5, "Курман айт")],
+            2029: [(2, 15, "Орозо айт"), (4, 24, "Курман айт")],
+            2030: [(2, 4, "Орозо айт"), (4, 14, "Курман айт")]
+        }
+        for m, d, name in floating_holidays.get(date_obj.year, []):
+            if date_obj.month == m and date_obj.day == d: return name
+        return None
+
+    def _fill_day(self, day_info, balances, max_slots, is_spring, weekly_usage):
+        daily_usage = {s['name']: 0 for s in self.subjects}
+        slots_filled = 0
+
+        while slots_filled < max_slots:
+            space_left = max_slots - slots_filled
+            
+            # Проверяем, сколько предметов вообще осталось в балансе
+            active_subjects = [s for s in self.subjects if balances[s['name']] > 0]
+            if not active_subjects:
+                break # Все часы всех предметов вычитаны
+                
+            # Если остался всего 1 предмет, отключаем дневные лимиты, чтобы вычитать его до конца!
+            ignore_daily_limit = (len(active_subjects) == 1)
+
+            def get_priority(sub):
+                name = sub['name']
+                rem = balances[name]
+                if rem <= 0: return (-1, 0, 0)
+                
+                allowance = float('inf') if ignore_daily_limit else (self.max_per_subject - daily_usage[name])
+                if allowance <= 0: return (-1, 0, 0)
+
+                # Логика акцентов (Весна vs Осень)
+                if is_spring:
+                    base_prio = 2 if sub['accent'] else 1
+                else:
+                    if sub['accent']:
+                        base_prio = 1 if weekly_usage.get(name, 0) < 2 else 0
+                    else:
+                        base_prio = 2
+                
+                # Ключевая логика: Можем ли мы поставить ПАРУ? 
+                # (Это отправляет одиночные уроки в конец дня)
+                can_pair = 1 if (rem >= 2 and allowance >= 2 and space_left >= 2) else 0
+                
+                return (base_prio, can_pair, rem)
+
+            available = [s for s in self.subjects if get_priority(s)[0] >= 0]
+            
+            if not available:
+                # Сработал лимит завуча (Вариант А). Оставляем день полупустым.
+                break 
+
+            best_sub = max(available, key=get_priority)
+            s_name = best_sub['name']
+            
+            rem_hours = balances[s_name]
+            allowance = float('inf') if ignore_daily_limit else (self.max_per_subject - daily_usage[s_name])
+            max_put = min(space_left, rem_hours, allowance)
+            
+            # Разбиваем на пары, если это возможно
+            if self.max_per_subject == 1 and not ignore_daily_limit:
+                chunk = 1
+            else:
+                chunk = 2 if max_put >= 2 else 1
+
+            day_info["slots"].extend([s_name] * chunk)
+            balances[s_name] -= chunk
+            daily_usage[s_name] += chunk
+            slots_filled += chunk
+            
+            if best_sub['accent']:
+                weekly_usage[s_name] = weekly_usage.get(s_name, 0) + chunk
+
+    def generate_schedule(self):
+        all_dates = []
+        curr = self.start_date
+        while curr <= self.end_date:
+            all_dates.append(curr)
+            curr += datetime.timedelta(days=1)
+            
+        ay_map = {}
+        for d in all_dates:
+            ay = d.year if d.month >= 8 else d.year - 1
+            if ay not in ay_map: ay_map[ay] = []
+            ay_map[ay].append(d)
+            
+        sorted_ays = sorted(list(ay_map.keys()))
+        
+        course_dates = {c: [] for c in range(1, self.num_courses + 1)}
+        for idx, ay in enumerate(sorted_ays):
+            c_idx = min(idx + 1, self.num_courses)
+            course_dates[c_idx].extend(ay_map[ay])
+
+        final_results = {}
+        group_max_cols = max(self.max_weekday_lessons, self.max_saturday_lessons)
+
+        for c in range(1, self.num_courses + 1):
+            c_dates = course_dates[c]
+            if not c_dates: continue
+            
+            c_balances = {}
+            for sub in self.subjects:
+                base_hours = sub['hours'] // self.num_courses
+                rem_hours = sub['hours'] % self.num_courses
+                c_balances[sub['name']] = base_hours + (rem_hours if c == self.num_courses else 0)
+
+            working_pool = []
+            c_calendar = {}
+            for d in c_dates:
+                if d.weekday() == 6: continue
+                if d.weekday() == 5 and self.work_week == "5-дневная рабочая неделя": continue
+                if d.month in [6, 7, 8]: continue
+                working_pool.append(d)
+                
+            buffer_set = set(sorted(working_pool)[-3:]) if working_pool else set()
+
+            for d in working_pool:
+                hol = self._is_kr_holiday(d)
+                if hol: c_calendar[d] = {"status": "Праздник", "info": hol, "slots": []}
+                elif d in buffer_set: c_calendar[d] = {"status": "Буфер", "info": "Резерв", "slots": []}
+                else: c_calendar[d] = {"status": "Рабочий", "slots": []}
+
+            current_week_idx = -1
+            weekly_accent_usage = {}
+            
+            for date_obj in sorted(c_calendar.keys()):
+                if c_calendar[date_obj]["status"] != "Рабочий": continue
+                
+                year, week_num, weekday = date_obj.isocalendar()
+                if week_num != current_week_idx:
+                    current_week_idx = week_num
+                    weekly_accent_usage = {s['name']: 0 for s in self.subjects}
+                    
+                max_s = self.max_saturday_lessons if date_obj.weekday() == 5 else self.max_weekday_lessons
+                is_spring = (1 <= date_obj.month <= 5)
+                
+                self._fill_day(c_calendar[date_obj], c_balances, max_s, is_spring, weekly_accent_usage)
+
+            rem_total = sum(c_balances.values())
+            if rem_total > 0:
+                buf_days = sorted([d for d in c_calendar if c_calendar[d]["status"] == "Буфер"], reverse=True)
+                for bd in buf_days:
+                    if sum(c_balances.values()) <= 0: break
+                    c_calendar[bd]["status"] = "Рабочий (Из резерва)"
+                    max_s = self.max_saturday_lessons if bd.weekday() == 5 else self.max_weekday_lessons
+                    self._fill_day(c_calendar[bd], c_balances, max_s, True, {})
+
+            # Передаем group_max_cols, чтобы Excel жестко отрисовал нужную сетку
+            final_results[f"{self.name} ({c} курс)"] = (c_calendar, c_balances, group_max_cols)
+
+        return final_results
+
+
+# =====================================================================
+# 2. СЕРВИС СБОРКИ EXCEL-ФАЙЛА
+# =====================================================================
+def create_excel_workbook(all_group_results):
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+
+    font_title = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
+    font_header = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    font_data = Font(name="Calibri", size=11)
+    font_bold_data = Font(name="Calibri", size=11, bold=True)
+    
+    fill_header = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+    fill_holiday = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid") 
+    fill_buffer = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")  
+    fill_weekend = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid") 
+    fill_eaten = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid") 
+
+    border_thin = Border(left=Side(style='thin', color='BFBFBF'), right=Side(style='thin', color='BFBFBF'),
+                         top=Side(style='thin', color='BFBFBF'), bottom=Side(style='thin', color='BFBFBF'))
+    align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    ws_rem = wb.create_sheet(title="Остаток часов")
+    ws_rem.append(["Сводный отчет по нераспределенным часам"])
+    ws_rem.merge_cells("A1:C1")
+    ws_rem["A1"].font, ws_rem["A1"].fill, ws_rem["A1"].alignment = font_title, fill_header, align_center
+    ws_rem.append(["Учебная группа (Курс)", "Наименование предмета", "Остаток (число часов)"])
+    for col_idx in range(1, 4):
+        c = ws_rem.cell(row=2, column=col_idx)
+        c.font, c.fill, c.alignment = font_header, PatternFill(start_color="2F5597", end_color="2F5597", fill_type="solid"), align_center
+
+    has_overflows = False
+
+    for tab_name, (calendar, remainders, group_max_cols) in all_group_results.items():
+        for sub_name, rem_h in remainders.items():
+            if rem_h > 0:
+                ws_rem.append([tab_name, sub_name, rem_h])
+                has_overflows = True
+                
+        safe_tab_name = tab_name[:31].replace("/", "-").replace("\\", "-")
+        ws = wb.create_sheet(title=safe_tab_name)
+        ws.append([f"Расписание занятий: {tab_name}"])
+        
+        # Жесткая фиксация колонок по лимитам завуча
+        max_cols = max(1, group_max_cols)
+        
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=2+max_cols)
+        ws["A1"].font, ws["A1"].fill, ws["A1"].alignment = font_title, fill_header, align_center
+        ws.row_dimensions[1].height = 35
+        
+        headers = ["Дата", "День недели"] + [f"Урок {i+1}" for i in range(max_cols)]
+        ws.append(headers)
+        for col_idx, h in enumerate(headers, 1):
+            c = ws.cell(row=2, column=col_idx)
+            c.font, c.fill, c.alignment, c.border = font_header, PatternFill(start_color="418AB3", end_color="418AB3", fill_type="solid"), align_center, border_thin
+
+        days_translations = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+        
+        row_idx = 3
+        for date_obj in sorted(calendar.keys()):
+            day_info = calendar[date_obj]
+            ws.cell(row=row_idx, column=1, value=date_obj.strftime("%d.%m.%Y")).alignment = align_center
+            ws.cell(row=row_idx, column=2, value=days_translations[date_obj.weekday()]).alignment = align_center
+            ws.cell(row=row_idx, column=1).font = ws.cell(row=row_idx, column=2).font = font_bold_data
+            
+            # Проверка, сколько уроков положено в этот конкретный день
+            limit_for_this_day = 0
+            if "Рабочий" in day_info["status"]:
+                # Суббота может иметь меньше колонок-уроков, чем будни, но сетка Excel единая.
+                limit_for_this_day = calendar[date_obj].get("max_s", max_cols) # Вспомогательная логика
+            
+            if day_info["status"] == "Праздник":
+                ws.merge_cells(start_row=row_idx, start_column=3, end_row=row_idx, end_column=2+max_cols)
+                c = ws.cell(row=row_idx, column=3, value=f"🎉 {day_info['info']}")
+                c.alignment, c.font = align_center, font_bold_data
+                for col in range(1, 3+max_cols): 
+                    ws.cell(row=row_idx, column=col).fill = fill_holiday
+                    ws.cell(row=row_idx, column=col).border = border_thin
+            elif day_info["status"] == "Буфер":
+                ws.merge_cells(start_row=row_idx, start_column=3, end_row=row_idx, end_column=2+max_cols)
+                c = ws.cell(row=row_idx, column=3, value="⏳ Резерв завуча")
+                c.alignment, c.font = align_center, font_bold_data
+                for col in range(1, 3+max_cols): 
+                    ws.cell(row=row_idx, column=col).fill = fill_buffer
+                    ws.cell(row=row_idx, column=col).border = border_thin
+            else:
+                slots = day_info["slots"]
+                # Отрисовываем уроки по жесткой сетке max_cols
+                for slot_idx in range(max_cols):
+                    col_num = 3 + slot_idx
+                    val = slots[slot_idx] if slot_idx < len(slots) else "—"
+                    c = ws.cell(row=row_idx, column=col_num, value=val)
+                    c.alignment, c.font = (align_center if val=="—" else Alignment(horizontal="left", vertical="center")), font_data
+                
+                for col in range(1, 3+max_cols): 
+                    if day_info["status"] == "Рабочий (Из резерва)":
+                        ws.cell(row=row_idx, column=col).fill = fill_eaten
+                    elif date_obj.weekday() == 5:
+                        ws.cell(row=row_idx, column=col).fill = fill_weekend
+                    ws.cell(row=row_idx, column=col).border = border_thin
+                    
+            row_idx += 1
+
+        for col in ws.columns:
+            ws.column_dimensions[get_column_letter(col[0].column)].width = max(max(len(str(c.value or '')) for c in col) + 3, 12)
+
+    if not has_overflows: ws_rem.append(["Остатков нет!"])
+    for col in ws_rem.columns: ws_rem.column_dimensions[get_column_letter(col[0].column)].width = 25
+
+    virtual_workbook = io.BytesIO()
+    wb.save(virtual_workbook)
+    virtual_workbook.seek(0)
+    return virtual_workbook
+
+# =====================================================================
+# 3. ПОЛЬЗОВАТЕЛЬСКИЙ ИНТЕРФЕЙС STREAMLIT
+# =====================================================================
+st.title("📅 Архитектор Расписания")
+
+if 'global_groups' not in st.session_state: st.session_state.global_groups = []
+if 'temp_subjects' not in st.session_state: st.session_state.temp_subjects = []
+if 'input_name' not in st.session_state: st.session_state.input_name = ""
+if 'input_hours' not in st.session_state: st.session_state.input_hours = 36
+if 'input_accent' not in st.session_state: st.session_state.input_accent = False
+
+def add_subject():
+    name = st.session_state.input_name.strip()
+    if name:
+        st.session_state.temp_subjects.append({
+            "name": name, 
+            "hours": st.session_state.input_hours, 
+            "accent": st.session_state.input_accent
+        })
+        st.session_state.input_name = ""
+        st.session_state.input_accent = False
     else:
-        df_sv = st.session_state.df_svodka
+        st.toast("⚠️ Введите название дисциплины!")
 
-        total_planned = int(df_sv["Общий план (2 года)"].sum())
-        total_placed_1 = int(df_sv["Вычитано на 1 курсе"].sum())
-        total_placed_2 = int(df_sv["Вычитано на 2 курсе"].sum())
-        total_leftover = int(df_sv["Нераспределённый остаток"].sum())
+def edit_subject(idx):
+    sub = st.session_state.temp_subjects.pop(idx)
+    st.session_state.input_name = sub['name']
+    st.session_state.input_hours = sub['hours']
+    st.session_state.input_accent = sub['accent']
 
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("📚 Всего по плану (2 года)", total_planned)
-        m2.metric("✅ Размещено (1 курс)", total_placed_1)
-        m3.metric("✅ Размещено (2 курс)", total_placed_2)
-        m4.metric("⚠️ Остаток", total_leftover,
-                  delta=f"-{total_leftover}" if total_leftover else "0",
-                  delta_color="inverse")
+def del_subject(idx): st.session_state.temp_subjects.pop(idx)
 
+# ЦЕНТРАЛЬНАЯ ПАНЕЛЬ УПРАВЛЕНИЯ ГРУППАМИ
+with st.expander("⚙️ УПРАВЛЕНИЕ БАЗОЙ И ГЕНЕРАЦИЯ (Нажмите чтобы открыть)", expanded=False):
+    if st.session_state.global_groups:
+        st.success(f"В базе сохранено групп: {len(st.session_state.global_groups)}")
+        for idx, g in enumerate(st.session_state.global_groups):
+            c1, c2, c3 = st.columns([4, 2, 1])
+            c1.markdown(f"**{g['name']}** — {g['num_courses']} курс(а)")
+            c2.markdown(f"Предметов: {len(g['subjects'])}")
+            c3.button("Удалить", key=f"del_group_{idx}", on_click=lambda i=idx: st.session_state.global_groups.pop(i))
+        
         st.markdown("---")
-        st.subheader("Детальная таблица вычитки")
-        st.dataframe(df_sv, use_container_width=True)
-
-        problem = df_sv[df_sv["Нераспределённый остаток"] > 10]
-        if not problem.empty:
-            st.warning(
-                f"⚠️ {len(problem)} дисциплин с остатком > 10 часов: "
-                + ", ".join(problem["Дисциплина"].tolist())
-            )
-        else:
-            st.success("🎉 Все дисциплины распределены с остатком ≤ 10 часов.")
-
-# ─────────────────────────────────────────────
-# Футер — техническая поддержка
-# ─────────────────────────────────────────────
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            if st.button("🗑️ Очистить всю базу", use_container_width=True):
+                st.session_state.global_groups = []
+                st.rerun()
+        with col_btn2:
+            if st.button("🚀 СГЕНЕРИРОВАТЬ EXCEL-ФАЙЛ", type="primary", use_container_width=True):
+                with st.spinner("Сборка расписания по курсам..."):
+                    all_results = {}
+                    for g_cfg in st.session_state.global_groups:
+                        course_results = ScheduleGenerator(g_cfg).generate_schedule()
+                        all_results.update(course_results)
+                    
+                    excel_stream = create_excel_workbook(all_results)
+                    st.download_button(
+                        label="📥 СКАЧАТЬ ГОТОВОЕ РАСПИСАНИЕ (.XLSX)", data=excel_stream,
+                        file_name=f"Расписание_{datetime.date.today().strftime('%d_%m_%Y')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+    else:
+        st.info("База пуста. Добавьте группы ниже.")
 
 st.markdown("---")
-st.markdown("""
-    <div style="display:flex; justify-content:flex-end; padding:6px 0 10px 0;">
-        <a href="https://wa.me/996556260309" target="_blank" style="
-            display:inline-flex; align-items:center; gap:8px;
-            background:#25D366; color:#ffffff; text-decoration:none;
-            font-size:14px; font-weight:600; padding:10px 22px; border-radius:10px;
-        ">
-            <svg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='white'>
-                <path d='M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z'/>
-                <path d='M12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.117 1.527 5.845L.057 23.882a.5.5 0 0 0 .614.635l6.263-1.641A11.945 11.945 0 0 0 12 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.885 0-3.653-.51-5.17-1.395l-.37-.215-3.838 1.006 1.024-3.73-.235-.384A9.96 9.96 0 0 1 2 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z'/>
-            </svg>
-            Техническая поддержка
-        </a>
-    </div>
-""", unsafe_allow_html=True)
+
+# ФОРМА ВВОДА
+col_left, col_right = st.columns([1, 1], gap="large")
+
+with col_left:
+    st.subheader("1. Параметры группы")
+    g_name = st.text_input("Название группы", placeholder="Например: ЭПП-22")
+    g_courses = st.number_input("Количество курсов (лет обучения)", min_value=1, max_value=4, value=1)
+    
+    g_week = st.selectbox("Режим обучения", ["5-дневная рабочая неделя", "6-дневная рабочая неделя"])
+    
+    # Динамические ползунки
+    g_weekday_limit = st.slider("Кол-во уроков в будни (Пн-Пт)", 4, 8, 6)
+    
+    if g_week == "6-дневная рабочая неделя":
+        g_sat_limit = st.slider("Кол-во уроков в субботу", 1, 8, 4)
+    else:
+        g_sat_limit = 0
+        
+    g_max_per_subject = st.slider("Макс. уроков одного предмета в день", 1, 8, 2)
+    dates = st.date_input("Общий период обучения (для всех курсов)", value=(datetime.date(2025, 9, 1), datetime.date(2026, 5, 25)))
+
+with col_right:
+    st.subheader("2. Дисциплины (Общие часы)")
+    
+    with st.container(border=True):
+        col_n, col_h = st.columns([2, 1])
+        with col_n: st.text_input("Название", key="input_name", placeholder="Математика")
+        with col_h: st.number_input("Часы", min_value=1, key="input_hours")
+            
+        st.checkbox("🔥 Акцент на конец года", key="input_accent")
+        st.button("➕ Добавить", on_click=add_subject, use_container_width=True)
+
+    if st.session_state.temp_subjects:
+        st.markdown("**Список к сохранению:**")
+        for i, sub in enumerate(st.session_state.temp_subjects):
+            c1, c2, c3 = st.columns([6, 1, 1])
+            c1.markdown(f"**{sub['name']}** — {sub['hours']} ч. {'🔥' if sub['accent'] else ''}")
+            c2.button("✏️", key=f"edit_sub_{i}", on_click=edit_subject, args=(i,))
+            c3.button("❌", key=f"del_sub_{i}", on_click=del_subject, args=(i,))
+
+st.markdown("---")
+
+if st.button("💾 СОХРАНИТЬ ГРУППУ В БАЗУ", type="secondary", use_container_width=True):
+    if not g_name: st.error("Укажите название группы!")
+    elif len(dates) != 2: st.error("Выберите полный диапазон дат!")
+    elif not st.session_state.temp_subjects: st.error("Добавьте хотя бы один предмет!")
+    else:
+        st.session_state.global_groups.append({
+            "name": g_name.strip(), "num_courses": g_courses, "work_week": g_week,
+            "max_saturday_lessons": g_sat_limit, "max_weekday_lessons": g_weekday_limit,
+            "max_per_subject": g_max_per_subject, "start_date": dates[0], "end_date": dates[1],
+            "subjects": list(st.session_state.temp_subjects)
+        })
+        st.session_state.temp_subjects = []
+        st.success(f"Группа {g_name} сохранена! Откройте верхнюю панель для генерации.")
+        st.rerun()
