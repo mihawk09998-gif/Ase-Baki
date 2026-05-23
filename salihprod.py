@@ -8,9 +8,9 @@ from openpyxl.utils import get_column_letter
 import streamlit.components.v1 as components
 
 # Настройки страницы
-st.set_page_config(page_title="Архитектор расписания v1.3", layout="wide", page_icon="📅", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Архитектор расписания v2.0 (ИДЕАЛ)", layout="wide", page_icon="📅", initial_sidebar_state="collapsed")
 
-# --- CSS МАГИЯ ---
+# --- CSS МАГИЯ ДЛЯ ЧИСТОГО ИНТЕРФЕЙСА ---
 st.markdown("""
 <style>
     #MainMenu {visibility: hidden;}
@@ -20,17 +20,10 @@ st.markdown("""
     [data-testid="stSidebar"] { display: none !important; }
     [data-testid="collapsedControl"] { display: none !important; }
     
-    div[role="radiogroup"] > label {
-        background-color: #f0f2f6 !important;
-        padding: 10px 20px !important;
-        border-radius: 8px !important;
-        border: 1px solid #e0e2e6 !important;
-        transition: all 0.3s ease;
-        margin-right: 10px;
-    }
-    div[role="radiogroup"] > label:hover {
-        background-color: #e0e2e6 !important;
-        cursor: pointer;
+    button[data-baseweb="tab"] {
+        font-size: 16px !important;
+        font-weight: bold !important;
+        padding: 12px 24px !important;
     }
     
     .custom-footer {
@@ -39,25 +32,45 @@ st.markdown("""
         padding: 10px 20px; font-size: 14px; font-weight: bold; z-index: 100;
         border-top: 1px solid #eee;
     }
-    
-    .red-cell { background-color: #ffcccc !important; color: #ff0000; font-weight: bold; }
 </style>
-<div class="custom-footer">сделано Lottarruu</div>
+<div class="custom-footer">сделано Lottarruu | v2.0 Dynamic Engine</div>
 """, unsafe_allow_html=True)
 
 # --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ---
 if 'db_rooms' not in st.session_state: st.session_state.db_rooms = []
 if 'db_teachers' not in st.session_state: st.session_state.db_teachers = []
 if 'global_groups' not in st.session_state: st.session_state.global_groups = []
-if 'custom_holidays' not in st.session_state: st.session_state.custom_holidays = [] # Список дат
+if 'custom_holidays' not in st.session_state: st.session_state.custom_holidays = []
 
 if 'editing_idx' not in st.session_state: st.session_state.editing_idx = None
 if 'draft_group' not in st.session_state: st.session_state.draft_group = None
 if 'temp_subjects' not in st.session_state: st.session_state.temp_subjects = []
 if 'do_scroll' not in st.session_state: st.session_state.do_scroll = False
+if 'sub_error' not in st.session_state: st.session_state.sub_error = False
 
-# --- ЛОГИКА ПРАЗДНИКОВ ---
+# --- CALLBACK ДЛЯ БЕЗОПАСНОГО ДОБАВЛЕНИЯ ПРЕДМЕТА ---
+def add_subject_cb():
+    name = st.session_state.sched_sub_name.strip()
+    t_name = st.session_state.sched_sub_teacher
+    hours = st.session_state.sched_sub_hours
+    accent = st.session_state.sched_sub_accent
+    
+    invalid_teachers = ["Сначала добавьте учителей!", "Нет учителей для этого предмета"]
+    
+    if name and t_name not in invalid_teachers:
+        st.session_state.temp_subjects.append({'name': name, 'teacher': t_name, 'hours': hours, 'accent': accent})
+        st.session_state.sched_sub_name = ""
+        st.session_state.sched_sub_accent = False
+        st.session_state.sub_error = False
+    else:
+        st.session_state.sub_error = True
+
+# --- ЛОГИКА ПРАЗДНИКОВ (СКОРРЕКТИРОВАННАЯ) ---
 def _is_holiday(date_obj):
+    # Жесткий перехват: эти дни всегда рабочие в нашем расписании!
+    if (date_obj.month == 11 and date_obj.day in [7, 8]) or (date_obj.month == 2 and date_obj.day == 23):
+        return None 
+
     if date_obj in st.session_state.custom_holidays: return "Выходной по решению завуча"
     if date_obj.month == 1 and 1 <= date_obj.day <= 12: return "Зимние каникулы"
     if date_obj.month == 5 and 1 <= date_obj.day <= 9: return "Майские каникулы"
@@ -72,32 +85,66 @@ def _is_holiday(date_obj):
         if date_obj.month == m and date_obj.day == d: return name
     return None
 
-# --- АЛГОРИТМ ГЕНЕРАЦИИ (CSP) ---
+# --- НОВЫЙ ДИНАМИЧЕСКИЙ ДВИЖОК ГЕНЕРАЦИИ (V2.0) ---
 def generate_master_schedule():
     all_dates = set()
-    for g in st.session_state.global_groups:
-        curr = g['start_date']
-        while curr <= g['end_date']:
-            all_dates.add(curr)
-            curr += datetime.timedelta(days=1)
-    all_dates = sorted(list(all_dates))
-    
-    results, balances, group_max_cols = {}, {}, {}
     flat_groups = []
+    results, balances, group_max_cols = {}, {}, {}
     
+    # 1. Распаковка групп и расчет рабочих дней
     for g in st.session_state.global_groups:
         for c in range(1, g['num_courses'] + 1):
             c_name = f"{g['name']} ({c} курс)"
+            
+            start_year = g['start_date'].year + (c - 1)
+            end_year = g['start_date'].year + c
+            c_start_date = datetime.date(start_year, 9, 1)
+            c_end_date = datetime.date(end_year, 5, 25) # Если часов слишком много, движок сам растянет дату!
+            
+            # Считаем точные рабочие дни курса
+            group_working_days = []
+            curr = c_start_date
+            # Берем с запасом до 15 июня, чтобы движку было куда растягивать расписание, если часов слишком много
+            while curr <= datetime.date(end_year, 6, 15): 
+                all_dates.add(curr)
+                holiday = _is_holiday(curr)
+                wd = curr.weekday()
+                is_work_day = True
+                if holiday or wd == 6 or (wd == 5 and g['work_week'] == "5-дневная рабочая неделя") or curr.month in [7,8]:
+                    is_work_day = False
+                if is_work_day:
+                    group_working_days.append(curr)
+                curr += datetime.timedelta(days=1)
+                
+            # Резерв завуча — жестко последние 4 рабочих дня в мае!
+            may_working_days = [d for d in group_working_days if d <= c_end_date]
+            reserve_days = set(may_working_days[-4:]) if len(may_working_days) > 4 else set()
+            
             c_bal = {}
             for sub in g['subjects']:
                 base = sub['hours'] // g['num_courses']
                 rem = sub['hours'] % g['num_courses']
-                c_bal[sub['name']] = {'h': base + (rem if c == g['num_courses'] else 0), 't': sub['teacher'], 'a': sub['accent']}
+                actual_hours = base + (rem if c == g['num_courses'] else 0)
+                
+                c_bal[sub['name']] = {
+                    'h': actual_hours, 't': sub['teacher'], 
+                    'accent': sub['accent'], 'daily_usage': 0
+                }
             
-            flat_groups.append({'id': c_name, 'ref': g, 'bal': c_bal, 'cal': {}, 'max_w': g['max_weekday_lessons'], 'max_s': g['max_saturday_lessons'], 'max_per_sub': g['max_per_subject'], 'g_room': g['room']})
-            balances[c_name] = {k: v['h'] for k,v in c_bal.items()}
+            flat_groups.append({
+                'id': c_name, 'ref': g, 'bal': c_bal, 'cal': {}, 
+                'max_w': g['max_weekday_lessons'], 'max_s': g['max_saturday_lessons'], 
+                'max_per_sub': g['max_per_subject'], 'g_room': g['room'],
+                'reserve_days': reserve_days,
+                'c_start': c_start_date, 'c_end': datetime.date(end_year, 6, 15),
+                'rem_days': max(1, len(group_working_days) - len(reserve_days)) # Для расчета срочности
+            })
+            balances[c_name] = {}
             group_max_cols[c_name] = max(g['max_weekday_lessons'], g['max_saturday_lessons'])
 
+    all_dates = sorted(list(all_dates))
+
+    # 2. Глобальный распределительный цикл (Движок Жадины)
     for date_obj in all_dates:
         is_spring = (1 <= date_obj.month <= 5)
         holiday = _is_holiday(date_obj)
@@ -107,49 +154,93 @@ def generate_master_schedule():
         active_today = []
         
         for fg in flat_groups:
-            if fg['ref']['start_date'] <= date_obj <= fg['ref']['end_date']:
-                if holiday: fg['cal'][date_obj] = {"status": "Праздник", "info": holiday, "slots": []}
-                elif weekday == 6 or (weekday == 5 and fg['ref']['work_week'] == "5-дневная рабочая неделя") or date_obj.month in [6,7,8]: pass 
-                else:
+            if fg['c_start'] <= date_obj <= fg['c_end']:
+                # Если все часы у группы УЖЕ кончились, и дата перевалила за 25 мая - просто стопаем для неё
+                total_h_left = sum(s['h'] for s in fg['bal'].values())
+                if total_h_left == 0 and date_obj > datetime.date(date_obj.year, 5, 25):
+                    continue
+
+                if holiday: 
+                    fg['cal'][date_obj] = {"status": "Праздник", "info": holiday, "slots": []}
+                elif weekday == 6 or (weekday == 5 and fg['ref']['work_week'] == "5-дневная рабочая неделя") or date_obj.month in [7,8]: 
+                    pass 
+                elif date_obj in fg['reserve_days']:
                     max_slots = fg['max_s'] if weekday == 5 else fg['max_w']
-                    active_today.append({'fg': fg, 'max_slots': max_slots, 'filled': 0, 'daily_sub_usage': {k: 0 for k in fg['bal']}, 'schedule': []})
+                    fg['cal'][date_obj] = {
+                        "status": "Резерв завуча", 
+                        "slots": [{"sub": "Резерв", "conflict": False} for _ in range(max_slots)]
+                    }
+                else:
+                    fg['rem_days'] -= 1 # Один день прошел
+                    max_slots = fg['max_s'] if weekday == 5 else fg['max_w']
+                    for s_name in fg['bal']: fg['bal'][s_name]['daily_usage'] = 0
+                        
+                    active_today.append({
+                        'fg': fg, 'max_slots': max_slots, 'schedule': [None] * max_slots
+                    })
                     fg['cal'][date_obj] = {"status": "Рабочий", "slots": []}
         
         if not active_today: continue
+            
         max_slots_today = max([ag['max_slots'] for ag in active_today])
         
+        # Распределяем уроки в дне
         for slot_idx in range(max_slots_today):
             if slot_idx not in daily_teacher_usage: daily_teacher_usage[slot_idx] = set()
             if slot_idx not in daily_room_usage: daily_room_usage[slot_idx] = set()
             
             for ag in active_today:
-                if ag['filled'] >= ag['max_slots']: continue
+                if slot_idx >= ag['max_slots']: continue
+                if ag['schedule'][slot_idx] is not None: continue 
+                
                 fg = ag['fg']
+                is_pair_start = (slot_idx % 2 == 0) and (slot_idx < 6) and (slot_idx + 1 < ag['max_slots'])
+                
+                # Подсчет выживших предметов
+                active_subs_count = sum(1 for s in fg['bal'].values() if s['h'] > 0)
+                # Если предметов мало или год заканчивается, а часов гора — СНИМАЕМ ЛИМИТЫ (Анти-облысение)
+                emergency_mode = (active_subs_count <= 3) or (fg['rem_days'] < 30 and sum(s['h'] for s in fg['bal'].values()) > fg['rem_days'] * 5)
+                
                 valid_subs = []
                 for s_name, s_data in fg['bal'].items():
-                    if s_data['h'] <= 0 or s_data['t'] in daily_teacher_usage[slot_idx]: continue 
-                    valid_subs.append(s_name)
+                    if s_data['h'] <= 0: continue
+                    t_name = s_data['t']
+                    if t_name in daily_teacher_usage[slot_idx]: continue
+                    
+                    # Проверяем лимиты
+                    if not emergency_mode and s_data['daily_usage'] >= fg['max_per_sub']: continue
+                    
+                    # Может ли стать парой?
+                    can_be_pair = False
+                    if is_pair_start and s_data['h'] >= 2:
+                        if not emergency_mode and s_data['daily_usage'] + 2 > fg['max_per_sub']:
+                            pass # пара нарушит лимит
+                        else:
+                            future_t_usage = daily_teacher_usage.get(slot_idx+1, set())
+                            if t_name not in future_t_usage: can_be_pair = True
+                            
+                    valid_subs.append((s_name, can_be_pair))
                 
                 chosen_sub = None
-                ignore_limits = (len([s for s in fg['bal'] if fg['bal'][s]['h'] > 0]) == 1)
+                will_be_pair = False
                 
                 if valid_subs:
-                    def get_prio(s_name):
-                        if not ignore_limits and ag['daily_sub_usage'][s_name] >= fg['max_per_sub']: return -1
-                        return 2 if (is_spring and fg['bal'][s_name]['a']) else 1
+                    def get_urgency(item):
+                        s_name, can_pair = item
+                        s_data = fg['bal'][s_name]
+                        # Коэффициент срочности = остаток часов / оставшиеся дни (идеальный балансировщик)
+                        urgency = s_data['h'] / max(1, fg['rem_days'])
+                        if is_spring and s_data['accent']: urgency += 2.0
+                        if is_pair_start and can_pair: urgency += 100.0 # Пары важнее всего
+                        # Штрафуем, если предмет уже был сегодня, чтобы раскидывать их по дню
+                        urgency -= (s_data['daily_usage'] * 5) 
+                        return urgency
                         
-                    prioritized = [s for s, p in [(s, get_prio(s)) for s in valid_subs] if p >= 0]
-                    if prioritized: chosen_sub = prioritized[0] 
-                    elif ignore_limits: chosen_sub = valid_subs[0]
+                    valid_subs.sort(key=get_urgency, reverse=True)
+                    chosen_sub, will_be_pair = valid_subs[0]
                 
                 if chosen_sub:
-                    fg['bal'][chosen_sub]['h'] -= 1
-                    ag['filled'] += 1
-                    ag['daily_sub_usage'][chosen_sub] += 1
-                    
                     t_name = fg['bal'][chosen_sub]['t']
-                    daily_teacher_usage[slot_idx].add(t_name)
-                    
                     t_obj = next((t for t in st.session_state.db_teachers if t['name'] == t_name), None)
                     target_room = t_obj['room'] if t_obj and t_obj['room'] != "Нет" else fg['g_room']
                     
@@ -158,14 +249,33 @@ def generate_master_schedule():
                         if target_room in daily_room_usage[slot_idx]: room_conflict = True
                         else: daily_room_usage[slot_idx].add(target_room)
                     
-                    ag['schedule'].append({"sub": chosen_sub, "conflict": room_conflict})
+                    # Ставим первый урок
+                    ag['schedule'][slot_idx] = {"sub": chosen_sub, "conflict": room_conflict}
+                    fg['bal'][chosen_sub]['h'] -= 1
+                    fg['bal'][chosen_sub]['daily_usage'] += 1
+                    daily_teacher_usage[slot_idx].add(t_name)
+                    
+                    # Ставим второй урок (пару)
+                    if is_pair_start and will_be_pair:
+                        if slot_idx + 1 not in daily_teacher_usage: daily_teacher_usage[slot_idx + 1] = set()
+                        if slot_idx + 1 not in daily_room_usage: daily_room_usage[slot_idx + 1] = set()
+                        
+                        ag['schedule'][slot_idx+1] = {"sub": chosen_sub, "conflict": room_conflict}
+                        fg['bal'][chosen_sub]['h'] -= 1
+                        fg['bal'][chosen_sub]['daily_usage'] += 1
+                        daily_teacher_usage[slot_idx+1].add(t_name)
+                        if target_room != "Нет": daily_room_usage[slot_idx+1].add(target_room)
                 else:
-                    ag['schedule'].append({"sub": "—", "conflict": False})
-                    ag['filled'] += 1
+                    # Если никто не подошел, значит реально дыра
+                    ag['schedule'][slot_idx] = {"sub": "—", "conflict": False}
 
-        for ag in active_today: ag['fg']['cal'][date_obj]['slots'] = ag['schedule']
+        for ag in active_today: 
+            ag['fg']['cal'][date_obj]['slots'] = ag['schedule']
 
-    for fg in flat_groups: results[fg['id']] = (fg['cal'], balances[fg['id']], group_max_cols[fg['id']])
+    for fg in flat_groups: 
+        balances[fg['id']] = {k: v['h'] for k, v in fg['bal'].items()}
+        results[fg['id']] = (fg['cal'], balances[fg['id']], group_max_cols[fg['id']])
+        
     return results
 
 # --- ЭКСПОРТ В EXCEL ---
@@ -206,15 +316,23 @@ def create_excel(all_results):
             ws.cell(row=2, column=i).border = border
         
         r_idx = 3
+        # Чтобы не выводить длинные пустые хвосты в июне, если часы кончились раньше:
+        last_active_date = max([d for d, info in cal.items() if any(s["sub"] != "—" for s in info["slots"])], default=list(cal.keys())[0])
+        
         for d in sorted(cal.keys()):
+            if d > last_active_date and d > datetime.date(d.year, 5, 25): 
+                break # Обрезаем вывод пустоты после 25 мая, если всё вычитано
+            
             info = cal[d]
             ws.cell(row=r_idx, column=1, value=d.strftime("%d.%m.%Y")).alignment = al_c
             ws.cell(row=r_idx, column=2, value=["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"][d.weekday()]).alignment = al_c
             ws.cell(row=r_idx, column=1).font = ws.cell(row=r_idx, column=2).font = font_bd
             
-            if info["status"] == "Праздник":
+            if info["status"] == "Праздник" or info["status"] == "Резерв завуча":
                 ws.merge_cells(start_row=r_idx, start_column=3, end_row=r_idx, end_column=2+m_c)
-                c = ws.cell(row=r_idx, column=3, value=f"🎉 {info['info']}")
+                icon = "🎉" if info["status"] == "Праздник" else "🔒"
+                text = info.get("info", "Резерв завуча")
+                c = ws.cell(row=r_idx, column=3, value=f"{icon} {text}")
                 c.alignment, c.font = al_c, font_bd
                 for col in range(1, 3+m_c): 
                     ws.cell(row=r_idx, column=col).fill = f_hol
@@ -224,6 +342,7 @@ def create_excel(all_results):
                     col = 3 + s_idx
                     if s_idx < len(info["slots"]):
                         slot = info["slots"][s_idx]
+                        if slot is None: slot = {"sub": "—", "conflict": False}
                         c = ws.cell(row=r_idx, column=col, value=slot["sub"])
                         if slot["conflict"]: c.fill = f_err 
                         elif d.weekday() == 5: c.fill = f_wk
@@ -243,63 +362,84 @@ def create_excel(all_results):
     bio.seek(0)
     return bio
 
-# --- НОВАЯ СИСТЕМА НАВИГАЦИИ ---
-st.markdown("<h2 style='text-align: center; color: #1F4E78;'> Архитектор Расписания</h2>", unsafe_allow_html=True)
+# --- НАВИГАЦИЯ ---
+st.markdown("<h2 style='text-align: center; color: #1F4E78;'>📅 Архитектор Расписания ПЛ №14</h2>", unsafe_allow_html=True)
 st.write("") 
 
-page = st.radio(
-    "Меню навигации:",
-    ["🏢 Расписание и Группы", "👨‍🏫 База Учителей", "🚪 База Кабинетов", "⚙️ Выходные дни"],
-    horizontal=True,
-    label_visibility="collapsed"
-)
-st.markdown("---")
+tab_groups, tab_teachers, tab_rooms, tab_holidays = st.tabs([
+    "🏢 Расписание и Группы", 
+    "👨‍🏫 База Учителей", 
+    "🚪 База Кабинетов", 
+    "⚙️ Выходные дни"
+])
 
-# --- СТРАНИЦЫ ---
-if page == " База Кабинетов":
-    st.title(" Управление кабинетами")
-    with st.form("add_room"):
+# =========================================================
+# ВКЛАДКА: БАЗА КАБИНЕТОВ
+# =========================================================
+with tab_rooms:
+    st.title("🚪 Управление кабинетами")
+    with st.form("add_room", clear_on_submit=True):
         r_name = st.text_input("Название/Номер кабинета")
         if st.form_submit_button("Добавить кабинет") and r_name:
-            if r_name not in st.session_state.db_rooms: st.session_state.db_rooms.append(r_name)
+            if r_name not in st.session_state.db_rooms: 
+                st.session_state.db_rooms.append(r_name)
+                st.success(f"Кабинет '{r_name}' добавлен!")
+                st.rerun()
     
-    for i, r in enumerate(st.session_state.db_rooms):
-        c1, c2 = st.columns([4, 1])
-        c1.write(f"Кабинет: **{r}**")
-        if c2.button("Удалить", key=f"del_r_{i}"):
-            st.session_state.db_rooms.pop(i); st.rerun()
+    if st.session_state.db_rooms:
+        st.markdown("### 📋 Список сохраненных кабинетов:")
+        for i, r in enumerate(st.session_state.db_rooms):
+            c1, c2 = st.columns([4, 1])
+            c1.write(f"Кабинет: **{r}**")
+            if c2.button("Удалить", key=f"del_r_{i}"):
+                st.session_state.db_rooms.pop(i)
+                st.rerun()
+    else:
+        st.info("Кабинетов пока нет в базе. Заполните форму выше.")
 
-elif page == "👨‍🏫 База Учителей":
+# =========================================================
+# ВКЛАДКА: БАЗА УЧИТЕЛЕЙ
+# =========================================================
+with tab_teachers:
     st.title("👨‍🏫 Управление преподавателями")
-    with st.form("add_teacher"):
+    with st.form("add_teacher", clear_on_submit=True):
         t_name = st.text_input("ФИО Преподавателя")
         t_subs = st.text_input("Предметы (через запятую)", placeholder="Алгебра, Геометрия")
         t_room = st.selectbox("Прикрепленный кабинет (Приоритет)", ["Нет"] + st.session_state.db_rooms)
         if st.form_submit_button("Сохранить преподавателя") and t_name:
             st.session_state.db_teachers.append({"name": t_name, "subs": [s.strip() for s in t_subs.split(",")], "room": t_room})
+            st.success(f"Учитель {t_name} успешно добавлен!")
+            st.rerun()
             
-    for i, t in enumerate(st.session_state.db_teachers):
-        c1, c2, c3 = st.columns([3, 3, 1])
-        c1.write(f"**{t['name']}** (Каб: {t['room']})")
-        c2.write(f"Предметы: {', '.join(t['subs'])}")
-        if c3.button("Удалить", key=f"del_t_{i}"):
-            st.session_state.db_teachers.pop(i); st.rerun()
+    if st.session_state.db_teachers:
+        st.markdown("### 📋 Список зарегистрированных преподавателей:")
+        for i, t in enumerate(st.session_state.db_teachers):
+            c1, c2, c3 = st.columns([3, 3, 1])
+            c1.write(f"**{t['name']}** (Каб: {t['room']})")
+            c2.write(f"Предметы: {', '.join(t['subs'])}")
+            if c3.button("Удалить", key=f"del_t_{i}"):
+                st.session_state.db_teachers.pop(i)
+                st.rerun()
+    else:
+        st.info("Преподаватели отсутствуют.")
 
-elif page == "⚙️ Выходные дни":
+# =========================================================
+# ВКЛАДКА: ВЫХОДНЫЕ ДНИ
+# =========================================================
+with tab_holidays:
     st.title("⚙️ Пользовательские нерабочие дни")
     st.write("Добавьте даты, которые будут отмечены как выходные для ВСЕХ групп.")
     
-    # Новая логика добавления дат (по одной)
-    with st.form("add_holiday_form"):
+    with st.form("add_holiday_form", clear_on_submit=True):
         new_date = st.date_input("Выберите дату для выходного", value=datetime.date.today())
         if st.form_submit_button("➕ Добавить выходной"):
             if new_date not in st.session_state.custom_holidays:
                 st.session_state.custom_holidays.append(new_date)
                 st.success(f"Дата {new_date.strftime('%d.%m.%Y')} успешно добавлена!")
+                st.rerun()
             else:
                 st.warning("Эта дата уже есть в списке выходных.")
                 
-    # Вывод списка добавленных дат
     if st.session_state.custom_holidays:
         st.markdown("### 🗓️ Список глобальных выходных:")
         st.session_state.custom_holidays.sort()
@@ -309,9 +449,14 @@ elif page == "⚙️ Выходные дни":
             if c2.button("Удалить", key=f"del_hol_{i}"):
                 st.session_state.custom_holidays.pop(i)
                 st.rerun()
+    else:
+        st.info("Пользовательских праздничных дней пока не добавлено.")
 
-elif page == "🏢 Расписание и Группы":
-    with st.expander("📊 Управление базой и Генерация (Нажмите чтобы развернуть)", expanded=True):
+# =========================================================
+# ВКЛАДКА: РАСПИСАНИЕ И ГРУППЫ
+# =========================================================
+with tab_groups:
+    with st.expander("📊 Управление базой и Генерация", expanded=True):
         if st.session_state.global_groups:
             st.success(f"В базе сохранено групп: {len(st.session_state.global_groups)}")
             for idx, g in enumerate(st.session_state.global_groups):
@@ -331,11 +476,11 @@ elif page == "🏢 Расписание и Группы":
             st.markdown("---")
             if st.button("🚀 СГЕНЕРИРОВАТЬ EXCEL-ФАЙЛ", type="primary", use_container_width=True):
                 if not st.session_state.db_teachers: 
-                    st.error("⚠️ База учителей пуста! Распределение невозможно. Сначала добавьте учителей во вкладке 'База Учителей'.")
+                    st.error("⚠️ База учителей пуста! Добавьте учителей.")
                 else:
-                    with st.spinner("Синхронная балансировка расписания..."):
+                    with st.spinner("Синхронная балансировка расписания (V2.0)..."):
                         excel_data = create_excel(generate_master_schedule())
-                        st.download_button("📥 СКАЧАТЬ ГОТОВОЕ РАСПИСАНИЕ", data=excel_data, file_name="Raspisanie_FINAL.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                        st.download_button("📥 СКАЧАТЬ ГОТОВОЕ РАСПИСАНИЕ", data=excel_data, file_name="Raspisanie_FINAL_V2.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
     st.markdown('<div id="edit-section" style="padding-top: 30px;"></div>', unsafe_allow_html=True)
     is_ed = st.session_state.editing_idx is not None
@@ -360,36 +505,51 @@ elif page == "🏢 Расписание и Группы":
         g_room = st.selectbox("Прикрепленный кабинет группы", ["Нет"] + st.session_state.db_rooms, index=default_room_idx)
         
         g_week = st.selectbox("Режим", ["5-дневная рабочая неделя", "6-дневная рабочая неделя"], index=0 if cur_g.get('work_week', '') == "5-дневная рабочая неделя" else 1)
-        g_w_l = st.slider("Будни (макс. уроков в день)", 4, 8, cur_g.get('max_weekday_lessons', 6))
+        g_w_l = st.slider("Будни (макс. уроков в день)", 4, 8, cur_g.get('max_weekday_lessons', 7)) # 7 уроков в норме
         g_s_l = st.slider("Суббота (макс. уроков)", 1, 8, cur_g.get('max_saturday_lessons', 4)) if g_week == "6-дневная рабочая неделя" else 0
         g_m_s = st.slider("Макс. 1 предмета в день", 1, 8, cur_g.get('max_per_subject', 2))
-        dates = st.date_input("Период обучения", value=(cur_g.get('start_date', datetime.date(2025,9,1)), cur_g.get('end_date', datetime.date(2026,5,25))))
+        
+        default_dates = (cur_g.get('start_date', datetime.date(2025,9,1)), cur_g.get('end_date', datetime.date(2026,5,25)))
+        dates = st.date_input("Период обучения", value=default_dates)
         
     with cr:
         st.markdown("##### Предметы и Нагрузка")
         with st.container(border=True):
-            s_name = st.text_input("Название дисциплины", key="i_n")
+            if st.session_state.sub_error:
+                st.error("⚠️ Укажите предмет и выберите подходящего учителя!")
+                
+            s_name = st.text_input("Название дисциплины (введите и кликните вне поля)", key="sched_sub_name")
             
-            teacher_options = [t['name'] for t in st.session_state.db_teachers] if st.session_state.db_teachers else ["Сначала добавьте учителей!"]
-            s_t = st.selectbox("Преподаватель", teacher_options, key="i_t")
-            s_h = st.number_input("Общее кол-во часов", min_value=1, key="i_h")
-            s_a = st.checkbox("Акцент (на весну)", key="i_a")
+            # ФИЛЬТРАЦИЯ УЧИТЕЛЕЙ
+            if not st.session_state.db_teachers:
+                teacher_options = ["Сначала добавьте учителей!"]
+            else:
+                if s_name:
+                    valid_t = [
+                        t['name'] for t in st.session_state.db_teachers 
+                        if s_name.lower().strip() in [sub.lower().strip() for sub in t.get('subs', [])]
+                    ]
+                    if valid_t: teacher_options = valid_t
+                    else: teacher_options = ["Нет учителей для этого предмета"]
+                else:
+                    teacher_options = [t['name'] for t in st.session_state.db_teachers]
             
-            if st.button("➕ Добавить предмет в список", use_container_width=True):
-                if s_name and s_t != "Сначала добавьте учителей!":
-                    st.session_state.temp_subjects.append({'name': s_name, 'teacher': s_t, 'hours': s_h, 'accent': s_a})
-                    st.session_state.i_n = ""
-                else: 
-                    st.error("Укажите предмет и выберите учителя!")
+            s_t = st.selectbox("Преподаватель", teacher_options, key="sched_sub_teacher")
+            s_h = st.number_input("Общее кол-во часов (1 кредит = 30 ч)", min_value=1, key="sched_sub_hours")
+            s_a = st.checkbox("Акцент (на весну)", key="sched_sub_accent")
+            
+            st.button("➕ Добавить предмет в список", on_click=add_subject_cb, use_container_width=True, key="sched_add_subject_final_btn")
 
         if st.session_state.temp_subjects:
             st.markdown("**Список дисциплин группы:**")
+            
         for i, sub in enumerate(st.session_state.temp_subjects):
             st.write(f"📘 **{sub['name']}** ({sub['teacher']}) — {sub['hours']} ч.")
-            if st.button("❌ Удалить из списка", key=f"dels_{i}"): 
-                st.session_state.temp_subjects.pop(i); st.rerun()
+            if st.button("❌ Удалить", key=f"sched_delete_subject_{i}_{sub['name']}"): 
+                st.session_state.temp_subjects.pop(i)
+                st.rerun()
 
-    if st.button("💾 " + ("СОХРАНИТЬ ИЗМЕНЕНИЯ ГРУППЫ" if is_ed else "СОХРАНИТЬ НОВУЮ ГРУППУ"), type="secondary", use_container_width=True):
+    if st.button("💾 " + ("СОХРАНИТЬ ИЗМЕНЕНИЯ" if is_ed else "СОХРАНИТЬ ГРУППУ"), type="secondary", use_container_width=True):
         if not g_name or not st.session_state.temp_subjects or len(dates)!=2: 
             st.error("Заполните название, выберите период дат и добавьте хотя бы один предмет!")
         else:
