@@ -249,8 +249,11 @@ def generate_master_schedule():
                         if target_room in daily_room_usage[slot_idx]: room_conflict = True
                         else: daily_room_usage[slot_idx].add(target_room)
                     
-                    # Ставим первый урок
-                    ag['schedule'][slot_idx] = {"sub": chosen_sub, "conflict": room_conflict}
+                    # Ставим первый урок (СОХРАНЯЕМ УЧИТЕЛЯ И КАБИНЕТ)
+                    ag['schedule'][slot_idx] = {
+                        "sub": chosen_sub, "conflict": room_conflict, 
+                        "teacher": t_name, "room": target_room
+                    }
                     fg['bal'][chosen_sub]['h'] -= 1
                     fg['bal'][chosen_sub]['daily_usage'] += 1
                     daily_teacher_usage[slot_idx].add(t_name)
@@ -260,14 +263,17 @@ def generate_master_schedule():
                         if slot_idx + 1 not in daily_teacher_usage: daily_teacher_usage[slot_idx + 1] = set()
                         if slot_idx + 1 not in daily_room_usage: daily_room_usage[slot_idx + 1] = set()
                         
-                        ag['schedule'][slot_idx+1] = {"sub": chosen_sub, "conflict": room_conflict}
+                        ag['schedule'][slot_idx+1] = {
+                            "sub": chosen_sub, "conflict": room_conflict, 
+                            "teacher": t_name, "room": target_room
+                        }
                         fg['bal'][chosen_sub]['h'] -= 1
                         fg['bal'][chosen_sub]['daily_usage'] += 1
                         daily_teacher_usage[slot_idx+1].add(t_name)
                         if target_room != "Нет": daily_room_usage[slot_idx+1].add(target_room)
                 else:
                     # Если никто не подошел, значит реально дыра
-                    ag['schedule'][slot_idx] = {"sub": "—", "conflict": False}
+                    ag['schedule'][slot_idx] = {"sub": "—", "conflict": False, "teacher": "", "room": ""}
 
         for ag in active_today: 
             ag['fg']['cal'][date_obj]['slots'] = ag['schedule']
@@ -278,7 +284,6 @@ def generate_master_schedule():
         
     return results
 
-# --- ЭКСПОРТ В EXCEL ---
 def create_excel(all_results):
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
@@ -294,10 +299,16 @@ def create_excel(all_results):
     border = Border(left=Side(style='thin', color='BFBFBF'), right=Side(style='thin', color='BFBFBF'), top=Side(style='thin', color='BFBFBF'), bottom=Side(style='thin', color='BFBFBF'))
     al_c = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
+    # ЛИСТ 1: Остаток часов
     ws_r = wb.create_sheet("Остаток часов")
     ws_r.append(["Группа", "Предмет", "Остаток (ч)"])
-    for r_idx in range(1, 4): ws_r.cell(row=1, column=r_idx).font = font_h; ws_r.cell(row=1, column=r_idx).fill = f_h
+    for r_idx in range(1, 4): 
+        ws_r.cell(row=1, column=r_idx).font = font_h
+        ws_r.cell(row=1, column=r_idx).fill = f_h
     
+    # Словарь для подсчета нагрузки: { "Иванов И.И.": {9: 20, 10: 45...} }
+    teacher_workload = {}
+
     for t_name, (cal, rem, max_c) in all_results.items():
         for s_name, h in rem.items():
             if h > 0: ws_r.append([t_name, s_name, h])
@@ -316,14 +327,15 @@ def create_excel(all_results):
             ws.cell(row=2, column=i).border = border
         
         r_idx = 3
-        # Чтобы не выводить длинные пустые хвосты в июне, если часы кончились раньше:
         last_active_date = max([d for d, info in cal.items() if any(s["sub"] != "—" for s in info["slots"])], default=list(cal.keys())[0])
         
         for d in sorted(cal.keys()):
             if d > last_active_date and d > datetime.date(d.year, 5, 25): 
-                break # Обрезаем вывод пустоты после 25 мая, если всё вычитано
+                break
             
             info = cal[d]
+            month = d.month
+            
             ws.cell(row=r_idx, column=1, value=d.strftime("%d.%m.%Y")).alignment = al_c
             ws.cell(row=r_idx, column=2, value=["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"][d.weekday()]).alignment = al_c
             ws.cell(row=r_idx, column=1).font = ws.cell(row=r_idx, column=2).font = font_bd
@@ -342,8 +354,24 @@ def create_excel(all_results):
                     col = 3 + s_idx
                     if s_idx < len(info["slots"]):
                         slot = info["slots"][s_idx]
-                        if slot is None: slot = {"sub": "—", "conflict": False}
-                        c = ws.cell(row=r_idx, column=col, value=slot["sub"])
+                        if slot is None: slot = {"sub": "—", "conflict": False, "teacher": "", "room": ""}
+                        
+                        # Подсчет нагрузки учителя
+                        t = slot.get("teacher")
+                        if slot["sub"] != "—" and t and t != "Нет":
+                            if t not in teacher_workload:
+                                teacher_workload[t] = {m: 0 for m in range(1, 13)}
+                            teacher_workload[t][month] += 1 # Добавляем 1 час за этот урок
+                        
+                        if slot["sub"] != "—":
+                            room_text = f"\nкаб. {slot['room']}" if slot['room'] and slot['room'] != "Нет" else ""
+                            cell_text = f"{slot['sub']}\n{slot['teacher']}{room_text}"
+                        else:
+                            cell_text = "—"
+                            
+                        c = ws.cell(row=r_idx, column=col, value=cell_text)
+                        c.alignment = al_c 
+                        
                         if slot["conflict"]: c.fill = f_err 
                         elif d.weekday() == 5: c.fill = f_wk
                     else:
@@ -354,9 +382,47 @@ def create_excel(all_results):
             r_idx += 1
             
         for col in ws.columns:
-            ws.column_dimensions[get_column_letter(col[0].column)].width = max(max(len(str(c.value or '')) for c in col) + 3, 12)
+            ws.column_dimensions[get_column_letter(col[0].column)].width = 22
 
-    for col in ws_r.columns: ws_r.column_dimensions[get_column_letter(col[0].column)].width = 25
+    for col in ws_r.columns: 
+        ws_r.column_dimensions[get_column_letter(col[0].column)].width = 25
+        
+    # ЛИСТ 2: Нагрузка по месяцам (Тарификация)
+    if teacher_workload:
+        ws_w = wb.create_sheet("Нагрузка по месяцам", 1) # Вставляем вторым листом
+        months_order = [9, 10, 11, 12, 1, 2, 3, 4, 5, 6]
+        months_names = {9:"Сен", 10:"Окт", 11:"Ноя", 12:"Дек", 1:"Янв", 2:"Фев", 3:"Мар", 4:"Апр", 5:"Май", 6:"Июн"}
+        
+        headers = ["Преподаватель"] + [months_names[m] for m in months_order] + ["Итого"]
+        ws_w.append(headers)
+        
+        for col_idx in range(1, len(headers) + 1):
+            c = ws_w.cell(row=1, column=col_idx)
+            c.font, c.fill, c.alignment, c.border = font_h, f_h, al_c, border
+            
+        row_idx = 2
+        for t in sorted(teacher_workload.keys()):
+            row_data = [t]
+            total = 0
+            for m in months_order:
+                val = teacher_workload[t].get(m, 0)
+                row_data.append(val if val > 0 else "") # Оставляем пусто, если 0 часов
+                total += val
+            row_data.append(total)
+            ws_w.append(row_data)
+            
+            for col_idx in range(1, len(row_data) + 1):
+                c = ws_w.cell(row=row_idx, column=col_idx)
+                c.border = border
+                c.alignment = Alignment(horizontal="center")
+            ws_w.cell(row=row_idx, column=1).alignment = Alignment(horizontal="left")
+            ws_w.cell(row=row_idx, column=len(row_data)).font = font_bd
+            row_idx += 1
+            
+        for col in ws_w.columns:
+            ws_w.column_dimensions[get_column_letter(col[0].column)].width = 12
+        ws_w.column_dimensions['A'].width = 35 # Делаем колонку с ФИО широкой
+
     bio = io.BytesIO()
     wb.save(bio)
     bio.seek(0)
